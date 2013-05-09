@@ -5,11 +5,12 @@ module Alpm
     , sha256
     , alpmVersion) where
 
-import Foreign hiding (unsafePerformIO)
+import Foreign hiding (unsafePerformIO, void)
 import Foreign.Ptr
 import Foreign.C.Types
 import Foreign.C.String
 
+import Control.Monad (void)
 import System.IO.Unsafe
 
 ---
@@ -27,18 +28,36 @@ foreign import ccall unsafe "alpm.h alpm_pkg_vercmp"
         c_alpm_vercmp :: CString -> CString -> IO CInt
 
 foreign import ccall unsafe "alpm.h alpm_initialize"
-        c_alpm_initialize :: CString -> CString -> Ptr AlpmError -> IO (Ptr AlpmHandle)
+        c_alpm_initialize :: CString -> CString -> Ptr AlpmError -> IO AlpmHandle
+
+foreign import ccall unsafe "alpm.h alpm_release"
+        c_alpm_release :: AlpmHandle -> IO CInt
+
+foreign import ccall unsafe "alpm.h alpm_get_localdb"
+        c_alpm_localdb :: AlpmHandle -> IO Database
+
+foreign import ccall unsafe "alpm.h alpm_db_get_name"
+        c_alpm_db_name :: Database -> IO CString
+
+foreign import ccall unsafe "alpm.h alpm_option_get_arch"
+        c_alpm_arch :: AlpmHandle -> IO CString
+
+foreign import ccall unsafe "alpm.h alpm_option_get_lockfile"
+        c_alpm_lockfile :: AlpmHandle -> IO CString
 
 foreign import ccall unsafe "alpm.h alpm_errno"
-        c_alpm_errno :: Ptr AlpmHandle -> AlpmError
+        c_alpm_errno :: AlpmHandle -> AlpmError
 
 foreign import ccall unsafe "alpm.h alpm_strerror"
         c_alpm_error :: AlpmError -> IO CString
 
 ---
 
-data AlpmHandle
-type AlpmError = CInt
+data DatabaseStruct
+data AlpmHandleStruct
+type AlpmHandle = Ptr AlpmHandleStruct
+type Database   = Ptr DatabaseStruct
+type AlpmError  = CInt
 
 rootPath :: FilePath
 rootPath = "/"
@@ -46,12 +65,39 @@ rootPath = "/"
 databasePath :: FilePath
 databasePath = "/var/lib/pacman/"
 
-initialize :: IO (Ptr AlpmHandle)
+maybeNull :: Storable a => Ptr a -> IO (Maybe a)
+maybeNull = maybeNullBy peek
+
+maybeNullBy :: (Ptr a -> IO b) -> Ptr a -> IO (Maybe b)
+maybeNullBy f ptr = if ptr == nullPtr then return Nothing else Just `fmap` f ptr
+
+maybeNullString :: CString -> IO (Maybe String)
+maybeNullString = maybeNullBy peekCString
+
+initialize :: IO AlpmHandle
 initialize = alloca $ \errorPtr -> withCString rootPath $ \root ->
              withCString databasePath $ \database ->
                  c_alpm_initialize root database errorPtr
 
-alpmError :: Ptr AlpmHandle -> String
+release :: AlpmHandle -> IO ()
+release = void . c_alpm_release
+
+localDatabase :: AlpmHandle -> IO Database
+localDatabase = c_alpm_localdb
+
+databaseName :: Database -> Maybe String
+databaseName d = unsafePerformIO $ c_alpm_db_name d >>= maybeNullString
+
+-- Does this need to be set first?
+-- It always seems to be returning a null pointer.
+architecture :: AlpmHandle -> Maybe String
+architecture h = unsafePerformIO $ c_alpm_arch h >>= maybeNullString
+
+-- | Read-only.
+lockFile :: AlpmHandle -> FilePath
+lockFile h = unsafePerformIO $ c_alpm_lockfile h >>= peekCString
+
+alpmError :: AlpmHandle -> String
 alpmError h = unsafePerformIO $ c_alpm_error eno >>= peekCString
     where eno = c_alpm_errno h
 
