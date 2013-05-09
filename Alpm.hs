@@ -33,12 +33,6 @@ foreign import ccall unsafe "alpm.h alpm_initialize"
 foreign import ccall unsafe "alpm.h alpm_release"
         c_alpm_release :: AlpmHandle -> IO CInt
 
-foreign import ccall unsafe "alpm.h alpm_get_localdb"
-        c_alpm_localdb :: AlpmHandle -> IO Database
-
-foreign import ccall unsafe "alpm.h alpm_db_get_name"
-        c_alpm_db_name :: Database -> IO CString
-
 foreign import ccall unsafe "alpm.h alpm_option_get_arch"
         c_alpm_arch :: AlpmHandle -> IO CString
 
@@ -51,12 +45,57 @@ foreign import ccall unsafe "alpm.h alpm_errno"
 foreign import ccall unsafe "alpm.h alpm_strerror"
         c_alpm_error :: AlpmError -> IO CString
 
+---------------------
+-- Database functions
+---------------------
+foreign import ccall unsafe "alpm.h alpm_get_localdb"
+        c_alpm_localdb :: AlpmHandle -> IO Database
+
+foreign import ccall unsafe "alpm.h alpm_db_get_name"
+        c_alpm_db_name :: Database -> IO CString
+
+foreign import ccall unsafe "alpm.h alpm_db_get_pkg"
+        c_alpm_get_pkg :: Database -> CString -> IO AlpmPkg
+
+localDatabase :: AlpmHandle -> IO Database
+localDatabase = c_alpm_localdb
+
+databaseName :: Database -> Maybe String
+databaseName d = unsafePerformIO $ c_alpm_db_name d >>= maybeNullString
+
+alpmPkg :: Database -> String -> IO (Maybe AlpmPkg)
+alpmPkg d p = withCString p $ \p' -> maybeNull `fmap` c_alpm_get_pkg d p'
+
+--------------------
+-- AlpmPkg functions
+--------------------
+foreign import ccall unsafe "alpm.h alpm_pkg_get_version"
+        c_alpm_pkg_version :: AlpmPkg -> IO CString
+
+foreign import ccall unsafe "alpm.h alpm_pkg_get_isize"
+        c_alpm_isize :: AlpmPkg -> CInt
+
+alpmPkgVersion :: AlpmPkg -> String
+alpmPkgVersion p = unsafePerformIO $ c_alpm_pkg_version p >>= peekCString
+
+-- | Result is in bytes.
+installedSize :: AlpmPkg -> Int
+installedSize = fromIntegral . c_alpm_isize
+
 ---
 
-data DatabaseStruct
+test n = do
+  p <- initialize >>= localDatabase >>= flip alpmPkg n
+  case p of
+    Just p' -> return $ installedSize p'
+    Nothing -> return 0
+
 data AlpmHandleStruct
+data DatabaseStruct
+data AlpmPkgStruct
 type AlpmHandle = Ptr AlpmHandleStruct
 type Database   = Ptr DatabaseStruct
+type AlpmPkg    = Ptr AlpmPkgStruct
 type AlpmError  = CInt
 
 rootPath :: FilePath
@@ -65,14 +104,14 @@ rootPath = "/"
 databasePath :: FilePath
 databasePath = "/var/lib/pacman/"
 
-maybeNull :: Storable a => Ptr a -> IO (Maybe a)
-maybeNull = maybeNullBy peek
+maybeNull :: Ptr a -> Maybe (Ptr a)
+maybeNull p = if p == nullPtr then Nothing else Just p
 
-maybeNullBy :: (Ptr a -> IO b) -> Ptr a -> IO (Maybe b)
-maybeNullBy f ptr = if ptr == nullPtr then return Nothing else Just `fmap` f ptr
+maybeNullPeekBy :: (Ptr a -> IO b) -> Ptr a -> IO (Maybe b)
+maybeNullPeekBy f p = if p == nullPtr then return Nothing else Just `fmap` f p
 
 maybeNullString :: CString -> IO (Maybe String)
-maybeNullString = maybeNullBy peekCString
+maybeNullString = maybeNullPeekBy peekCString
 
 initialize :: IO AlpmHandle
 initialize = alloca $ \errorPtr -> withCString rootPath $ \root ->
@@ -81,12 +120,6 @@ initialize = alloca $ \errorPtr -> withCString rootPath $ \root ->
 
 release :: AlpmHandle -> IO ()
 release = void . c_alpm_release
-
-localDatabase :: AlpmHandle -> IO Database
-localDatabase = c_alpm_localdb
-
-databaseName :: Database -> Maybe String
-databaseName d = unsafePerformIO $ c_alpm_db_name d >>= maybeNullString
 
 -- Does this need to be set first?
 -- It always seems to be returning a null pointer.
